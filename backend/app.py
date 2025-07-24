@@ -1,142 +1,86 @@
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-}
+from flask import Flask, request, jsonify
+from joblib import load
+import numpy as np
+import re
+import nltk
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
 
-body {
-  background-color: #f5f5f5;
-  color: #333;
-  line-height: 1.6;
-}
+nltk.download('stopwords')
+nltk.download('wordnet')
 
-.app {
-  max-width: 800px;
-  margin: 0 auto;
-  padding: 20px;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-}
+app = Flask(__name__)
 
-header {
-  text-align: center;
-  margin-bottom: 30px;
-}
+# Initialize preprocessing tools
+lemmatizer = WordNetLemmatizer()
+stop_words = set(stopwords.words('english'))
 
-header h1 {
-  color: #2c3e50;
-  margin-bottom: 10px;
-}
+def preprocess_text(text):
+    # Convert to lowercase
+    text = text.lower()
+    
+    # Remove special characters and numbers
+    text = re.sub(r'[^a-zA-Z\s]', '', text)
+    
+    # Tokenize
+    words = text.split()
+    
+    # Remove stopwords and lemmatize
+    words = [lemmatizer.lemmatize(word) for word in words if word not in stop_words]
+    
+    return ' '.join(words)
 
-.news-form {
-  background: white;
-  padding: 25px;
-  border-radius: 8px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-  margin-bottom: 30px;
-}
+# Load models (in production, load these once when starting the app)
+try:
+    tfidf = load('models/tfidf_vectorizer.joblib')
+    model = load('models/logistic_regression.joblib')
+except Exception as e:
+    print(f"Error loading models: {e}")
+    tfidf = None
+    model = None
 
-.news-form textarea {
-  width: 100%;
-  min-height: 150px;
-  padding: 15px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  font-size: 16px;
-  margin-bottom: 15px;
-  resize: vertical;
-}
+@app.route('/predict', methods=['POST'])
+def predict():
+    if not request.is_json:
+        return jsonify({"error": "Request must be JSON"}), 400
+    
+    data = request.get_json()
+    text = data.get('text', '')
+    
+    if not text:
+        return jsonify({"error": "Text is required"}), 400
+    
+    if not tfidf or not model:
+        return jsonify({"error": "Model not loaded"}), 500
+    
+    try:
+        # Preprocess text
+        processed_text = preprocess_text(text)
+        
+        # Vectorize
+        X = tfidf.transform([processed_text])
+        
+        # Predict
+        prediction = model.predict(X)[0]
+        proba = model.predict_proba(X)[0]
+        
+        # Get confidence
+        confidence = np.max(proba)
+        
+        # Map prediction to label
+        label = 'real' if prediction == 1 else 'fake'
+        
+        return jsonify({
+            'prediction': label,
+            'confidence': float(confidence),
+            'text': text[:200] + '...' if len(text) > 200 else text
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-.news-form button {
-  background-color: #3498db;
-  color: white;
-  border: none;
-  padding: 12px 20px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 16px;
-  transition: background-color 0.3s;
-}
+@app.route('/')
+def home():
+    return "SACH Fake News Detector API is running!"
 
-.news-form button:hover {
-  background-color: #2980b9;
-}
-
-.news-form button:disabled {
-  background-color: #95a5a6;
-  cursor: not-allowed;
-}
-
-.result {
-  padding: 20px;
-  border-radius: 8px;
-  margin-bottom: 20px;
-  background: white;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-}
-
-.result.real {
-  border-left: 5px solid #2ecc71;
-}
-
-.result.fake {
-  border-left: 5px solid #e74c3c;
-}
-
-.result h3 {
-  margin-bottom: 10px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.confidence {
-  font-weight: bold;
-  margin: 10px 0;
-}
-
-.tips {
-  margin-top: 15px;
-  padding-top: 15px;
-  border-top: 1px solid #eee;
-}
-
-.tips h4 {
-  margin-bottom: 10px;
-}
-
-.tips ul {
-  padding-left: 20px;
-}
-
-.tips li {
-  margin-bottom: 5px;
-}
-
-.error {
-  color: #e74c3c;
-  padding: 15px;
-  background: #fadbd8;
-  border-radius: 4px;
-  margin-bottom: 20px;
-}
-
-footer {
-  margin-top: auto;
-  text-align: center;
-  padding: 20px;
-  color: #7f8c8d;
-  font-size: 14px;
-}
-
-@media (max-width: 600px) {
-  .app {
-    padding: 15px;
-  }
-  
-  .news-form {
-    padding: 15px;
-  }
-}
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)
